@@ -1,0 +1,7 @@
+
+.env
+/tests
+
+pyproject.toml
+poetry.lock
+/venv
