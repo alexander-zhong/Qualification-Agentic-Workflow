@@ -57,9 +57,9 @@ COMPANY_RUBRIC = {
 
 
 
-SPEAKER_RUBRIC = {
-    "speaker_expertise_alignment": """
-    Title: Speaker Expertise Alignment
+PERSON_RUBRIC = {
+    "expertise_alignment": """
+    Title: Expertise Alignment
     Description: This evaluates how closely the speaker's expertise aligns with the goals of the event. Speakers with backgrounds more closely related to event theme can bring more value, especially speakers that had a past focus in university events.
     Score Table:
     5. Perfect alignment. The speaker's expertise and experiences directly match the core goals of the event. They have a proven track record of contributing to similar events or discussions and bring significant depth to the topic. Speakers with backgrounds that is more closely related to event theme can bring more value, especially speakers that had a past focus in university events.
