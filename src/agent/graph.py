@@ -51,6 +51,7 @@ def init_state(state: State):
             "main_iteration": 0,
             "current_category": None,
             "current_rubric": None,
+            "reflection_iteration": 0
         }
 
 
@@ -190,7 +191,7 @@ def query_vector_db(state: State):
 def score_ranking_agent(state: State): 
     prompt = f"""
     You are a grading ranker agent responsible for using previous searched information and previous reasoning to rank each score choice on the rubric. 
-    Output in order of top (most likley) to bottom (least likely) score with a short explanation.
+    Output in order of top (most likley) to bottom (least likely) score with a short explanation. Output ONLY JSON with no additional TEXT. 
     
     1. Understand the previous search results and rubric reasoning by reading previous messages attached below. 
     2. Use this understanding to **rank scores from most likely to least likely**.
@@ -253,9 +254,12 @@ def reflection_agent(state: State):
     # store the chosen score into the state if reasoning + research is good
     if output["next_step"] == "complete":
         
+        # resets the reflection iteration
+        state["reflection_iteration"] = 
+        
         # TODO remove this once structured output implemented on the scoring agent
         cleaned_output = preprocess_json(state["messages"][-1].content)
-        
+        print(cleaned_output)
         # Converting string to 2d array
         cleaned_output = ast.literal_eval(cleaned_output)
         

@@ -42,6 +42,7 @@ class State(TypedDict):
     main_iteration: int
     current_category: Optional[str]
     current_rubric: Optional[str]
+    reflection_iteration: bool
     
     
     
