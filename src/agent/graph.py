@@ -12,12 +12,25 @@ from langgraph.graph import MessagesState
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
 from src.agent.state import State
-from src.agent.rubric import COMPANY_RUBRIC, PERSON_RUBRIC 
+from src.agent.rubric import COMPANY_RUBRIC, MICROSOFT_TEST_RUBRIC, PERSON_RUBRIC 
 import re
 
 llm = ChatOpenAI(model="gpt-4o")
 llm_json = ChatOpenAI(model="gpt-4o", model_kwargs={ "response_format": { "type": "json_object" } })
 
+query_collector = []
+
+# ==============================================
+# Constants Section
+# ==============================================
+
+MAX_REFLECTION_RETRY = 1
+TESTING_MODE = True
+
+
+# ==============================================
+# Helper Functions
+# ==============================================
 
 def preprocess_json(value: str):
     cleaned_output = value.strip()
@@ -157,9 +170,10 @@ def generate_queries_agent(state: State):
     Previous messages:\n  
     """
     
-    for item in state["messages"]:
-        print(item)
+    if TESTING_MODE:
+        return state # skip this node if testing mode is on
     
+
     prompt = prompt + ", ".join(str(item.content) for item in state["messages"]) # will need to turn this to a string format TODO 
     
     sys_msg = SystemMessage(content=prompt)
@@ -173,43 +187,61 @@ def query_vector_db(state: State):
     
     queries = state["messages"][-1].content.split(",")
     
-    print(queries)
     
-    results = ""
-    
-    alternating = "negative"
-    for query in queries:
-        # alternating = "negative" if alternating == "positive" else "positive"
-        results = results + "Query: " + query + "\nResults: " + llm.invoke(f"(instruction make this {alternating} paragraph about the topic) Generate a very short paragraph on this query about " + query).content + "\n"
-        
-    
-    
+    if TESTING_MODE:
+        results = "\n".join(f"{title}: {desc}" for title, desc in MICROSOFT_TEST_RUBRIC[state["current_category"]])
+    else:
+        pass #TODO
+
     vector_output = AIMessage(content=results)
+    
     
     return {**state, "messages": state["messages"] + [vector_output]}
 
 def score_ranking_agent(state: State): 
     prompt = f"""
-    You are a grading ranker agent responsible for using previous searched information and previous reasoning to rank each score choice on the rubric. 
-    Output in order of top (most likley) to bottom (least likely) score with a short explanation. Output ONLY JSON with no additional TEXT. 
+    You are a grading ranker agent responsible for using previous searched information and previous reasoning choose a score onto the rubric. 
+    Output the most likely score with a short explanation. Output ONLY JSON with no additional TEXT. 
     
     1. Understand the previous search results and rubric reasoning by reading previous messages attached below. 
-    2. Use this understanding to **rank scores from most likely to least likely**.
-    3. Provide the ranking in **JSON format**, where each entry contains:
-        - The score (as a string).
-        - A concise but informative explanation for why the score holds this rank.
+    2. Use this understanding to **find the most reasonable score**.
+    3. YOU MUST Provide the ranking in **JSON format** as described:
+        - The score (as an int).
+        - A concise but informative explanation for why the score holds this rank. Provide examples and evidence to back your score up.
+        
+    This is the official rubric: ({state['current_category']}) \n        
    
-    Example output format: [["3", "explanation"], ["2", "explanation"], ["1", "explanation"]]
     
-    Previous messages:\n  
+    Previous messages on reasoning and search history:\n  
     """ 
     
     prompt = prompt + ", ".join(str(item.content) for item in state["messages"]) # TODO need a better way to store previous information rather than giving a bunch of messages. 
     
-    sys_msg = SystemMessage(content=prompt)
-    output = llm.invoke([sys_msg])
+    # Structured JSON output schema for the model
+    schema = {
+            "title": "Schema",
+            "description": "A schema for storing chosen score and detailed concise reasoning",
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "The reason why you made this decision. Be concise but detailed with evidence and examples."
+                }
+            },
+            "required": ["score", "reason"]
+        }
     
-    return {**state, "messages": state["messages"] + [output]}
+    llm_with_schema = llm_json.with_structured_output(schema=schema)
+    
+    sys_msg = SystemMessage(content=prompt)
+    output = llm_with_schema.invoke([sys_msg])
+    
+    return {**state, "messages": state["messages"] + [AIMessage(str(output))]}
 
 
 def reflection_agent(state: State): 
@@ -222,7 +254,7 @@ def reflection_agent(state: State):
     
     1. Double check if we have enough information to make informed guesses. 
     2. Double check if there was any logic flaw in our reasoning.
-    3. Output the next steps in the format given. You must output the format given in JSON. complete means the rearch and logic justifies the current grading. research_issue means we need more research. logic_flow_issue means our reasoning might have been flawed or forgot to consider a key factor. 
+    3. Output the next steps in the format given. You must strictly follow the provided JSON schema in your response. complete means the research and logic justifies the current grading. research_issue means we need more research. logic_flow_issue means our reasoning might have been flawed or forgot to consider a key factor. 
     
     
     Previous messages:\n  
@@ -250,27 +282,22 @@ def reflection_agent(state: State):
     
     sys_msg = SystemMessage(content=prompt)
     output = llm_with_schema.invoke([sys_msg])
-    
-    # store the chosen score into the state if reasoning + research is good
-    if output["next_step"] == "complete":
-        
+    # store the chosen score into the state if reasoning + research is good OR if over max iteration
+    if output["next_step"] == "complete" or state["reflection_iteration"] > MAX_REFLECTION_RETRY:
         # resets the reflection iteration
-        state["reflection_iteration"] = 
+        state["reflection_iteration"] = 0
+        output["next_step"] = "complete"
         
-        # TODO remove this once structured output implemented on the scoring agent
-        cleaned_output = preprocess_json(state["messages"][-1].content)
-        print(cleaned_output)
-        # Converting string to 2d array
-        cleaned_output = ast.literal_eval(cleaned_output)
-        
-        print(cleaned_output)
+        # Turns string representation of dict into a dict obj
+        cleaned_output = ast.literal_eval(state["messages"][-1].content)
+
         
         if state["candidate_type"] == "person":
-            return {**state, "messages": state["messages"] + [AIMessage(str(output))], "person_rubric": {**state["person_rubric"], state["current_category"]: (int(cleaned_output[0][0]), str(cleaned_output[0][1]))}}
+            return {**state, "messages": state["messages"] + [AIMessage(str(output))], "person_rubric": {**state["person_rubric"], state["current_category"]: (int(cleaned_output["score"]), str(cleaned_output["reason"]))}}
         elif state["candidate_type"] == "company":
-            return {**state, "messages": state["messages"] + [AIMessage(str(output))], "company_rubric": {**state["company_rubric"], state["current_category"]: (int(cleaned_output[0][0]), str(cleaned_output[0][1]))}}
+            return {**state, "messages": state["messages"] + [AIMessage(str(output))], "company_rubric": {**state["company_rubric"], state["current_category"]: (int(cleaned_output["score"]), str(cleaned_output["reason"]))}}
     else:
-        return {**state, "messages": state["messages"] + [AIMessage(str(output))]}
+        return {**state, "messages": state["messages"] + [AIMessage(str(output))], "reflection_iteration": state["reflection_iteration"] + 1}
 
 
 # ==============================================
