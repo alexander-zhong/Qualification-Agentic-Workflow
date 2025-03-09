@@ -11,7 +11,7 @@ from langgraph.graph import MessagesState
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.constants import Send
-from src.agent.state import State
+from src.agent.state import State, returnState
 from src.agent.rubric import COMPANY_RUBRIC, MICROSOFT_TEST_RUBRIC, PERSON_RUBRIC
 import re
 
@@ -54,15 +54,8 @@ def init_state(state: State):
         "candidate_type": None,
         "current_candidate": None,
         "company_rubric": {
-            "company_mission_alignment": None,
-            "relevant_events": None,
-            "sponsorship_history": None,
-            "geographic_relevance": None,
         },
         "person_rubric": {
-            "expertise_alignment": None,
-            "company_relevance": None,
-            "geographic_relevance": None,
         },
         "candidate_list": [],
         "main_iteration": 0,
@@ -363,7 +356,6 @@ def reflection_agent(state: State):
                 **state,
                 "messages": state["messages"] + [AIMessage(str(output))],
                 "company_rubric": {
-                    **state["company_rubric"],
                     state["current_category"]: (
                         int(cleaned_output["score"]),
                         str(cleaned_output["reason"]),
@@ -378,9 +370,15 @@ def reflection_agent(state: State):
         }
 
 
+def end_subgraph(state: State):
+    return state
 
-def aggregate_subgraph(state: State):
-    pass
+
+def merge_parallel_results(state: State):
+    return state
+
+
+
 # ==============================================
 # Conditional Function Section
 # ==============================================
@@ -400,7 +398,7 @@ def reflection_agent_conditional(state: State):
     output = ast.literal_eval(preprocess_json(state["messages"][-1].content))
     decision = output["next_step"]
     if decision == "complete":
-        return END
+        return "end_subgraph"
     elif decision == "research_issue":
         return "query_vector_db"
     elif decision == "logic_flow_issue":
@@ -432,13 +430,14 @@ category_grading_subgraph.add_node("generate_queries_agent", generate_queries_ag
 category_grading_subgraph.add_node("query_vector_db", query_vector_db)
 category_grading_subgraph.add_node("score_ranking_agent", score_ranking_agent)
 category_grading_subgraph.add_node("reflection_agent", reflection_agent)
+category_grading_subgraph.add_node("end_subgraph", end_subgraph)
 
 
 category_grading_subgraph.add_conditional_edges(
     "reflection_agent",
     reflection_agent_conditional,
     {
-        END: END,
+        "end_subgraph": "end_subgraph",
         "query_vector_db": "query_vector_db",
         "score_ranking_agent": "score_ranking_agent",
     },
@@ -467,6 +466,7 @@ workflow.add_node("query_keyword_agent", query_keyword_agent)
 workflow.add_node("category_divider", category_divider)
 workflow.add_node("category_grading_subgraph", category_grading_subgraph.compile())
 workflow.add_node("add_score_database", add_score_database)
+workflow.add_node("merge_parallel_results", merge_parallel_results)
 
 
 # Defining the architecture
@@ -488,10 +488,9 @@ workflow.add_conditional_edges(
 )
 
 
-
-
 workflow.add_edge("query_keyword_agent", "candidate_processor")
-workflow.add_edge("category_grading_subgraph", "add_score_database")
+workflow.add_edge("category_grading_subgraph", "merge_parallel_results")
+workflow.add_edge("merge_parallel_results", "add_score_database")
 
 # TMP TODO ending edge
 workflow.add_edge("add_score_database", END)

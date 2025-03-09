@@ -7,7 +7,7 @@ from langgraph.graph import MessagesState # prebuilt msg state when needed
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, field_validator, ValidationError
-
+import operator
 
 
 # Keeps track of the message states - we can add more keys here for rubric data and etc.
@@ -32,18 +32,21 @@ class CompanyRubric(TypedDict):
 ]
 
 
-class State(TypedDict):
-    messages: list[AnyMessage]
-    candidate_type: Optional[Literal["person", "company"]]
-    current_candidate: Optional[str]
-    company_rubric: CompanyRubric
-    person_rubric: PersonRubric
-    candidate_list: list[Optional[Tuple[str, str]]]
-    main_iteration: int
-    current_category: Optional[str]
-    current_rubric: Optional[str]
-    reflection_iteration: bool
-    
-    
-    
 
+def replaceReducer(val1, val2):
+    return val2
+
+def objectMergeReducer(val1, val2):
+    return {**val1, **val2}
+
+class State(TypedDict):
+    messages: Annotated[list[AnyMessage], replaceReducer]
+    candidate_type: Annotated[Optional[Literal["person", "company"]], replaceReducer]
+    current_candidate: Annotated[Optional[str], replaceReducer]
+    company_rubric: Annotated[CompanyRubric, objectMergeReducer]
+    person_rubric: Annotated[PersonRubric, objectMergeReducer]
+    candidate_list: Annotated[list[Optional[Tuple[str, str]]], replaceReducer]
+    main_iteration: Annotated[int, replaceReducer]
+    current_category: Annotated[Optional[str], replaceReducer]
+    current_rubric: Annotated[Optional[str], replaceReducer]
+    reflection_iteration: Annotated[bool, replaceReducer]
