@@ -10,6 +10,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph import MessagesState
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
+from langgraph.constants import Send
 from src.agent.state import State
 from src.agent.rubric import COMPANY_RUBRIC, MICROSOFT_TEST_RUBRIC, PERSON_RUBRIC
 import re
@@ -110,7 +111,10 @@ def candidate_processor(state: State):
 def category_divider(state: State):  # TODO Need better name
     # Chooses candidate categories
 
-    if state["candidate_type"] == "speaker":
+    return state
+
+
+    """ if state["candidate_type"] == "speaker":
 
         # loops through each category, if the category has not been marked, put the category into state and begin the marking process
         for category in PERSON_RUBRIC.keys():
@@ -133,30 +137,19 @@ def category_divider(state: State):  # TODO Need better name
             "messages": state["messages"] + [SystemMessage(content="grading_complete")],
         }
 
-    # if candidate is company, we use the company_rubric
+
+    # Parallel Workflow
     elif state["candidate_type"] == "company":
-        for category in COMPANY_RUBRIC.keys():
-            if (
-                state["company_rubric"][category] == None
-                or state["company_rubric"][category] == 0
-            ):
-                msg = f"Selected category {category}. Will begin marking now."
-                current_rubric = COMPANY_RUBRIC[category]
-                return {
+        return [Send("rubric_reasoning_agent", {
                     **state,
                     "messages": state["messages"][:1] + [SystemMessage(content=msg)],
                     "current_category": category,
-                    "current_rubric": current_rubric,
-                }
-
-        return {
-            **state,
-            "messages": state["messages"] + [SystemMessage(content="grading_complete")],
-        }
+                    "current_rubric": COMPANY_RUBRIC[category],
+                }) for category in COMPANY_RUBRIC.keys()]         
 
     # candidate did not have an identifier
     else:
-        raise Exception("Error in identifying speaker or company!")
+        raise Exception("Error in identifying speaker or company!") """
 
 
 def add_score_database(state: State):
@@ -257,19 +250,23 @@ def query_vector_db(state: State):
 
 def score_ranking_agent(state: State):
     prompt = f"""
-    You are a grading ranker agent responsible for using previous searched information and previous reasoning choose a score onto the rubric. 
-    Output the most likely score with a short explanation. Output ONLY JSON with no additional TEXT. 
-    
+    *Context*
+    You are a grading agent responsible for using previous searched information and previous reasoning choose a score onto the rubric.  
+    Goal is to determine whether entity suitable for sponsorship/partnership of our event {state["messages"][0].content}. 
+
+    *Task*
     1. Understand the previous search results and rubric reasoning by reading previous messages attached below. 
     2. Use this understanding to **find the most reasonable score**.
     3. YOU MUST Provide the ranking in **JSON format** as described:
         - The score (as an int).
         - A concise but informative explanation for why the score holds this rank. Provide examples and evidence to back your score up.
         
-    This is the official rubric: ({state['current_category']}) \n        
+    *Rubric*
+    This is the official rubric: 
+    ({state['current_category']}) 
    
     
-    Previous messages on reasoning and search history:\n  
+    Previous messages on reasoning and search history:
     """
 
     prompt = prompt + ", ".join(
@@ -381,6 +378,9 @@ def reflection_agent(state: State):
         }
 
 
+
+def aggregate_subgraph(state: State):
+    pass
 # ==============================================
 # Conditional Function Section
 # ==============================================
@@ -396,26 +396,59 @@ def candidate_processor_conditional(state: State):
         return "category_divider"
 
 
-def category_divider_conditional(state: State):
-    output = state["messages"][-1].content
-    if output == "grading_complete":
-        return "add_score_database"  # TODO (this has to go towards a node that stores it into the database)
-    else:
-        return "rubric_reasoning_agent"  # TODO
-
-
 def reflection_agent_conditional(state: State):
-
     output = ast.literal_eval(preprocess_json(state["messages"][-1].content))
     decision = output["next_step"]
     if decision == "complete":
-        return "category_divider"
+        return END
     elif decision == "research_issue":
         return "query_vector_db"
     elif decision == "logic_flow_issue":
         return "score_ranking_agent"
     else:
         raise Exception()
+
+
+def parallel_grading(state: State):
+    # TODO add speaker
+    
+    if state["candidate_type"] == "company":
+        return [Send("category_grading_subgraph", {
+                    **state,
+                    "messages": state["messages"][:1] + [SystemMessage(content=f"Selected category {category}. Will begin marking now.")],
+                    "current_category": category,
+                    "current_rubric": COMPANY_RUBRIC[category],
+                }) for category in COMPANY_RUBRIC.keys()]         
+
+
+# ==============================================
+# Reasoning Subgraph Section
+# ==============================================
+
+category_grading_subgraph = StateGraph(State)
+
+category_grading_subgraph.add_node("rubric_reasoning_agent", rubric_reasoning_agent)
+category_grading_subgraph.add_node("generate_queries_agent", generate_queries_agent)
+category_grading_subgraph.add_node("query_vector_db", query_vector_db)
+category_grading_subgraph.add_node("score_ranking_agent", score_ranking_agent)
+category_grading_subgraph.add_node("reflection_agent", reflection_agent)
+
+
+category_grading_subgraph.add_conditional_edges(
+    "reflection_agent",
+    reflection_agent_conditional,
+    {
+        END: END,
+        "query_vector_db": "query_vector_db",
+        "score_ranking_agent": "score_ranking_agent",
+    },
+)
+
+category_grading_subgraph.add_edge(START, "rubric_reasoning_agent")
+category_grading_subgraph.add_edge("rubric_reasoning_agent", "generate_queries_agent")
+category_grading_subgraph.add_edge("generate_queries_agent", "query_vector_db")
+category_grading_subgraph.add_edge("query_vector_db", "score_ranking_agent")
+category_grading_subgraph.add_edge("score_ranking_agent", "reflection_agent")
 
 
 # ==============================================
@@ -432,12 +465,8 @@ workflow.add_node("init_state", init_state)
 workflow.add_node("candidate_processor", candidate_processor)
 workflow.add_node("query_keyword_agent", query_keyword_agent)
 workflow.add_node("category_divider", category_divider)
+workflow.add_node("category_grading_subgraph", category_grading_subgraph.compile())
 workflow.add_node("add_score_database", add_score_database)
-workflow.add_node("rubric_reasoning_agent", rubric_reasoning_agent)
-workflow.add_node("generate_queries_agent", generate_queries_agent)
-workflow.add_node("query_vector_db", query_vector_db)
-workflow.add_node("score_ranking_agent", score_ranking_agent)
-workflow.add_node("reflection_agent", reflection_agent)
 
 
 # Defining the architecture
@@ -455,28 +484,14 @@ workflow.add_conditional_edges(
 
 workflow.add_conditional_edges(
     "category_divider",
-    category_divider_conditional,
-    {
-        "add_score_database": "add_score_database",
-        "rubric_reasoning_agent": "rubric_reasoning_agent",
-    },
+    parallel_grading, ["category_grading_subgraph"]
 )
 
-workflow.add_conditional_edges(
-    "reflection_agent",
-    reflection_agent_conditional,
-    {
-        "category_divider": "category_divider",
-        "query_vector_db": "query_vector_db",
-        "score_ranking_agent": "score_ranking_agent",
-    },
-)
+
+
 
 workflow.add_edge("query_keyword_agent", "candidate_processor")
-workflow.add_edge("rubric_reasoning_agent", "generate_queries_agent")
-workflow.add_edge("generate_queries_agent", "query_vector_db")
-workflow.add_edge("query_vector_db", "score_ranking_agent")
-workflow.add_edge("score_ranking_agent", "reflection_agent")
+workflow.add_edge("category_grading_subgraph", "add_score_database")
 
 # TMP TODO ending edge
 workflow.add_edge("add_score_database", END)
