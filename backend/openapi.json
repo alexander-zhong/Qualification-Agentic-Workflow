@@ -1,0 +1,161 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Qualification Workflow API",
+        "version": "1.0.0",
+        "description": "API for evaluating entities."
+    },
+    "paths": {
+        "/api/v1/evaluate": {
+            "post": {
+                "summary": "Submit an evaluation job",
+                "operationId": "submitEvaluation",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "event": {
+                                        "type": "object",
+                                        "properties": {
+                                            "event_name": { "type": "string" },
+                                            "event_description": { "type": "string" }
+                                        },
+                                        "required": ["event_name", "event_description"]
+                                    },
+                                    "available_entities": {
+                                        "type": "array",
+                                        "items": {
+                                            "$ref": "#/components/schemas/Entity"
+                                        }
+                                    }
+                                },
+                                "required": ["event", "available_entities"]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Job created successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EvaluationResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/evaluate/{job_id}": {
+            "get": {
+                "summary": "Retrieve evaluation job status/results",
+                "operationId": "getEvaluationResult",
+                "parameters": [
+                    {
+                        "name": "job_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Evaluation result",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "oneOf": [
+                                        { "$ref": "#/components/schemas/EvaluationResponse" },
+                                        { "$ref": "#/components/schemas/EvaluationResult" }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Job not found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "detail": { "type": "string" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Entity": {
+                "type": "object",
+                "properties": {
+                    "entity_id": { "type": "integer" },
+                    "entity_name": { "type": "string" },
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["human", "company"]
+                    }
+                },
+                "required": ["entity_id", "entity_name", "entity_type"]
+            },
+            "EvaluationResponse": {
+                "type": "object",
+                "properties": {
+                    "job_id": { "type": "integer" },
+                    "status": {
+                        "type": "string",
+                        "enum": ["complete", "processing", "queue"]
+                    }
+                },
+                "required": ["job_id", "status"]
+            },
+            "EvaluationResult": {
+                "type": "object",
+                "properties": {
+                    "job_id": { "type": "integer" },
+                    "status": {
+                        "type": "string",
+                        "enum": ["complete", "processing", "queue"]
+                    },
+                    "scores": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entity": { "$ref": "#/components/schemas/Entity" },
+                                "scores": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "category_name": { "type": "string" },
+                                            "category_score": {
+                                                "type": "integer",
+                                                "enum": [1, 2, 3, 4, 5]
+                                            },
+                                            "category_reasoning": { "type": "string" }
+                                        },
+                                        "required": ["category_name", "category_score", "category_reasoning"]
+                                    }
+                                },
+                                "should_reach_out": { "type": "boolean" }
+                            },
+                            "required": ["entity", "scores", "should_reach_out"]
+                        }
+                    }
+                },
+                "required": ["job_id", "status", "scores"]
+            }
+        }
+    }
+}
